@@ -40,43 +40,38 @@ type Time = Int
 newtype Sprite = Sprite {runSprite :: CharSTATE -> (Texture, [SDL.Rectangle CInt])} 
 type SpriteIndex = Int
 data CharSTATE = U | D | L | R 
-type CharState = ((Sprite, CharSTATE, SpriteIndex, Game), (CInt, CInt))
-type CharPosition = (CInt, CInt)
+type CharState = ((Sprite, CharSTATE, SpriteIndex, Game), Body)
+type Body = [(CInt, CInt)]
 type ElapsedTime = Int
 
-updateState :: Char -> State CharState CharPosition
+updateState :: Char -> State CharState Body
 updateState c = do
-  ((sprite, state, index, game), (x, y)) <- ST.get
+  ((sprite, state, index, game), xs) <- ST.get
   let spriteIndexSize = length . snd $ runSprite sprite state
       nextIndex       = if index >= (spriteIndexSize - 1) 
                         then 0 
                         else index + 1
   case c of 
-    'a' -> put((sprite, L, nextIndex, game), (x, y))
-    'd' -> put((sprite, R, nextIndex, game), (x, y))
-    's' -> put((sprite, U, nextIndex, game), (x, y))
-    'w' -> put((sprite, D, nextIndex, game), (x, y))
+    'a' -> put((sprite, L, nextIndex, game), xs)
+    'd' -> put((sprite, R, nextIndex, game), xs)
+    's' -> put((sprite, U, nextIndex, game), xs)
+    'w' -> put((sprite, D, nextIndex, game), xs)
+  (_, (xs')) <-  ST.get
+  return (xs')
 
-  (_, (x', y')) <-  ST.get
-  return (x', y')
-
-updatePosition :: Int -> State CharState CharPosition 
+updatePosition :: Int -> State CharState Body 
 updatePosition ticks = do   
-  ((sprite, state, index, game), (x, y)) <- ST.get
+  ((sprite, state, index, game), xs) <- ST.get
   let elapsedTime = (fromIntegral ticks) - (getTime game)
       game' = if elapsedTime > 500 
-              then Game $ fromIntegral ticks
-              else game
-      (x', y') =  if getTime game' /= getTime game 
-                  then (50, 50)
-                  else (0, 0)
-  case state of 
-    L -> put((sprite, L, index, game'), (x - x', y))
-    R -> put((sprite, R, index, game'), (x + x', y))
-    D -> put((sprite, D, index, game'), (x, y + y'))
-    U -> put((sprite, U, index, game'), (x, y - y'))           
-  (_, (newX, newY)) <- ST.get
-  Debug.Trace.trace (show newX) (return (newX, newY))
+                    then Game $ fromIntegral ticks
+                    else game
+      xss  = if getTime game' /= getTime game 
+                    then updateBody state xs
+                    else xs
+  put((sprite, state, index, game'), xss)        
+  (_, xs') <- ST.get
+  return xs'
 
 loadTexture :: SDL.Renderer -> FilePath -> IO Texture
 loadTexture r filePath = do
@@ -112,10 +107,10 @@ processEvents' state events = do
 processKeyboard' :: CharState -> SDL.Keysym -> Int -> CharState
 processKeyboard' state keySym ticks = 
   case SDL.keysymKeycode keySym of
-               SDL.KeycodeUp   -> execState ((updateState 's')) state
+               SDL.KeycodeUp   -> execState ((updateState 'w')) state
                SDL.KeycodeLeft -> execState ((updateState 'a')) state
                SDL.KeycodeRight-> execState ((updateState 'd')) state
-               SDL.KeycodeDown -> execState ((updateState 'w')) state
+               SDL.KeycodeDown -> execState ((updateState 's')) state
                _ -> state
  
 
@@ -127,20 +122,30 @@ loop r (Character texture state) window  = do
   SDL.rendererDrawColor r $= V4 maxBound maxBound maxBound maxBound
   SDL.clear r
   -- Update next sprite animation
-  ((sprite, state, index, game), (x, y)) <- processEvents' state poll
+  ((sprite, state', index, game), xs) <- processEvents' state poll
   -- Update draw position
   
   -- putStrLn (show $ (index, (x', y')))
 
   -- Get texture and sprite from current state
-  let (texture', rects) = runSprite sprite state 
+  let (texture', rects) = runSprite sprite state' 
+      toDraw = map (\(x, y) -> P $ V2 x y) xs
+      rect = Just $ rects !! index
   -- Draw sprite at current position
-  renderTexture r texture (P $ V2 x y) (Just $ rects !! index)
+  sequence $ map (\pv2 -> renderTexture r texture pv2 rect) toDraw
+  sequence $ map (\(g, f) -> (print (g, f))) xs
   SDL.present r
-  unless quit $ loop r (Character texture ((sprite, state, index, game), (x, y))) window
+  unless quit $ loop r (Character texture ((sprite, state', index, game), xs)) window
 
 
-
+updateBody :: CharSTATE -> Body -> Body
+updateBody charSTATE [] = []
+updateBody charSTATE (x:xs) = xs ++ ( map f $ drop (length xs - 1) xs )
+      where f = \(a, b) -> case charSTATE of 
+                                U -> (a, b+50)
+                                D -> (a, b-50)
+                                L -> (a-50, b)
+                                R -> (a+50, b)
 
 main :: IO ()
 main = do
@@ -178,7 +183,7 @@ main = do
 
 
   -- loop renderer (True, (0,0)) window 
-  loop renderer (Character spriteSheetTexture ((sprite, U, 0, game), (50, 50))) window
+  loop renderer (Character spriteSheetTexture ((sprite, U, 0, game), [(50, 50),(100, 100)])) window
 
 
   SDL.destroyWindow window
