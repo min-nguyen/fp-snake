@@ -54,22 +54,29 @@ updateState c = do
   case c of 
     'a' -> put((sprite, L, nextIndex, game), (x, y))
     'd' -> put((sprite, R, nextIndex, game), (x, y))
-    's' -> put((sprite, D, nextIndex, game), (x, y))
-    'w' -> put((sprite, U, nextIndex, game), (x, y))
+    's' -> put((sprite, U, nextIndex, game), (x, y))
+    'w' -> put((sprite, D, nextIndex, game), (x, y))
 
   (_, (x', y')) <-  ST.get
   return (x', y')
 
 updatePosition :: Int -> State CharState CharPosition 
-updatePosition = do   
+updatePosition ticks = do   
+  ((sprite, state, index, game), (x, y)) <- ST.get
   let elapsedTime = (fromIntegral ticks) - (getTime game)
       game' = if elapsedTime > 500 
               then Game $ fromIntegral ticks
               else game
-  (x', y') =  if getTime game' /= getTime game 
-              then (50, 50)
-              else (0, 0)
-
+      (x', y') =  if getTime game' /= getTime game 
+                  then (50, 50)
+                  else (0, 0)
+  case state of 
+    L -> put((sprite, L, index, game'), (x - x', y))
+    R -> put((sprite, R, index, game'), (x + x', y))
+    D -> put((sprite, D, index, game'), (x, y + y'))
+    U -> put((sprite, U, index, game'), (x, y - y'))           
+  (_, (newX, newY)) <- ST.get
+  Debug.Trace.trace (show newX) (return (newX, newY))
 
 loadTexture :: SDL.Renderer -> FilePath -> IO Texture
 loadTexture r filePath = do
@@ -98,19 +105,19 @@ processEvents' state events = do
                     SDL.KeyboardEvent eventType -> 
                       processKeyboard' st (SDL.keyboardEventKeysym eventType) 
                         (fromIntegral ticks)
-                    _ -> st) state events 
-    return x
+                    _ -> st) state events
+        x' = execState (updatePosition $ fromIntegral ticks) x
+    return x'
 
 processKeyboard' :: CharState -> SDL.Keysym -> Int -> CharState
 processKeyboard' state keySym ticks = 
   case SDL.keysymKeycode keySym of
-    SDL.KeycodeUp   -> execState (updateState 's') state 
-    SDL.KeycodeLeft -> execState (updateState 'a') state 
-    SDL.KeycodeRight-> execState (updateState 'd') state 
-    SDL.KeycodeDown -> execState (updateState 'w') state 
-    _ -> state
-
-
+               SDL.KeycodeUp   -> execState ((updateState 's')) state
+               SDL.KeycodeLeft -> execState ((updateState 'a')) state
+               SDL.KeycodeRight-> execState ((updateState 'd')) state
+               SDL.KeycodeDown -> execState ((updateState 'w')) state
+               _ -> state
+ 
 
 loop :: SDL.Renderer -> Character -> SDL.Window -> IO ()
 loop r (Character texture state) window  = do
