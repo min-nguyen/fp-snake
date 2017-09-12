@@ -35,15 +35,20 @@ screenWidth, screenHeight :: CInt
 
 -- SDL.Texture, (Width, Height)
 data Texture = Texture SDL.Texture (V2 CInt)
-data Character = Character Texture CharState 
-data Game = Game { getTime :: Int } 
-type Time = Int
 
+data Game = Game { getTime :: Int, hitCoin :: Bool } 
+type Time = Int
+-- Char
+data Character = Character Texture CharState 
 newtype Sprite = Sprite {runSprite :: Direction -> (Texture, [SDL.Rectangle CInt])} 
 type SpriteIndex = Int
 data Direction = U | D | L | R 
 type CharState = ((Sprite, Direction, SpriteIndex, Game), Body)
 type Body = [(CInt, CInt)]
+
+-- Coin
+type Coin = ((CInt, CInt), Int)
+
 
 updateState :: Char -> State CharState Body
 updateState c = do
@@ -62,15 +67,17 @@ updateState c = do
 
 updatePosition :: Int -> State CharState Body 
 updatePosition ticks = do   
-  ((sprite, state, index, game), xs) <- ST.get
+  ((sprite, direction, index, game), xs) <- ST.get
   let elapsedTime = (fromIntegral ticks) - (getTime game)
+              -- Restart game timer relative to Raw.getTicks
       game' = if elapsedTime > 500 
-                    then Game $ fromIntegral ticks
+                    then Game (fromIntegral ticks) (hitCoin game)
                     else game
-      xss  = if getTime game' /= getTime game 
-                    then updateBody state xs
-                    else xs
-  put((sprite, state, index, game'), xss)        
+              -- Update body 
+      (xss, b)  = if getTime game' /= getTime game 
+                        then updateBody direction (hitCoin game') xs
+                        else (xs, hitCoin game')
+  put((sprite, direction, index, game' {hitCoin = b}), xss)        
   (_, xs') <- ST.get
   return xs'
 
@@ -113,10 +120,11 @@ processKeyboard' state keySym ticks =
                SDL.KeycodeRight-> execState ((updateState 'd')) state
                SDL.KeycodeDown -> execState ((updateState 's')) state
                _ -> state
- 
 
-loop :: SDL.Renderer -> Character -> Int -> SDL.Window -> IO ()
-loop r (Character texture state) seed window  = do
+
+
+loop :: SDL.Renderer -> Character -> Coin -> SDL.Window -> IO ()
+loop r (Character texture state) ((coinX, coinY), seed) window  = do
   poll <- SDL.pollEvents
   -- If elapsed time > 100, update game
   let quit = elem SDL.QuitEvent $ map SDL.eventPayload poll
@@ -129,31 +137,40 @@ loop r (Character texture state) seed window  = do
   let (texture', rects) = runSprite sprite state' 
       toDraw = map (\(x, y) -> P $ V2 x y) xs
       rect = Just $ rects !! index
-      -- Spawn coin from body
-      ((coinx, coiny), seed') = spawnCoin xs seed
+      -- Check if head has hit coin
+      head = (drop (length xs - 1) xs) !! 0
+      (((coinX', coinY'), seed'), game') = 
+        if (fst head == coinX) && (snd head == coinY) 
+        then (spawnCoin xs seed, game {hitCoin = True})
+        else (((coinX, coinY), seed), game)
+
   -- Draw sprite at current position
   sequence $ map (\pv2 -> renderTexture r texture pv2 rect) toDraw
 
   -- Debug printing
   sequence $ map (\(g, f) -> (print (g, f))) xs
-  print ((coinx, coiny), seed)
+  print ((coinX', coinY'), seed')
 
-  -- Draw
-  renderTexture r texture (P $ V2 70 70) (Just $ 
+  -- Draw Coin
+  renderTexture r texture (P $ V2 coinX' coinY') (Just $ 
           SDL.Rectangle (P $ V2 100 100) (V2 50 50) ) 
 
   SDL.present r
-  unless quit $ loop r (Character texture ((sprite, state', index, game), xs)) seed' window
+  unless quit $ loop r (Character texture ((sprite, state', index, game'), xs)) 
+                  ((coinX', coinY'), seed') window
 
 -- to fix : doesn't work with length == 1
-updateBody :: Direction -> Body -> Body
-updateBody charSTATE [] = []
-updateBody charSTATE (x:xs) = xs ++ ( map f $ drop (length xs - 1) xs )
-      where f = \(a, b) -> case charSTATE of 
+updateBody :: Direction -> Bool -> Body -> (Body, Bool)
+updateBody direction b [] = ([], b)
+updateBody direction b (x:xs) = 
+      ((x' ++ xs ++ ( map f $ drop (length xs - 1) xs )), b')
+      where f = \(a, b) -> case direction of 
                                 U -> (a, b+50)
                                 D -> (a, b-50)
                                 L -> (a-50, b)
                                 R -> (a+50, b)
+            (x', b') = if b then ([x], False) else ([], b)
+            
 
 freeCells :: Body -> Body
 freeCells body =  [   (height*50, width*50) | 
@@ -199,8 +216,8 @@ main = do
   spriteSheetTexture <- loadTexture renderer "../assets/SF.bmp"
   
   let draw = renderTexture renderer
-      game = Game 0
-      seed = 2
+      game = Game 0 False
+      coin = ((500, 500), 2)
       -- Load Snake
       spriteSize = V2 50 50
       clip1 = SDL.Rectangle (P (V2 0 10)) spriteSize
@@ -216,7 +233,7 @@ main = do
   -- loop renderer (True, (0,0)) window 
   loop renderer 
     (Character spriteSheetTexture ((sprite, U, 0, game), [(50, 50),(100, 100)])) 
-         seed window
+      coin window
 
 
   SDL.destroyWindow window
